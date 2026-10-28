@@ -52,9 +52,10 @@ class LlmRouter(
 
         fun isTransient(e: Throwable): Boolean = when (e) {
             is IOException -> true
-            is TranslationException ->
-                e.code == null || e.code == 408 || e.code == 409 || e.code == 425 ||
-                    e.code == 429 || e.code >= 500
+            // No code means the model answered but not usefully (refusal, empty, not JSON): another
+            // provider is a better bet than asking the same one again.
+            is TranslationException -> e.code != null &&
+                (e.code == 408 || e.code == 409 || e.code == 425 || e.code == 429 || e.code >= 500)
             else -> false
         }
 

@@ -54,11 +54,17 @@ class PageRenderer(private val targetLang: String) {
         for (block in blocks) {
             val ring = ringPixels(px, w, h, block.box, PAD * 3)
             val color = medianColor(ring)
+            if (!isFlat(ring, color)) {
+                // Text drawn on artwork (sound effects, captions): a flat fill would paint a box over
+                // the art, so keep the original and caption the translation over it instead.
+                block.onArt = true
+                continue
+            }
             for (line in block.lines) {
                 fillRect(px, w, h, padded(line.box, PAD, w, h), color)
             }
-            // Flat surroundings mean a normal bubble: also clear marks the detector missed in it.
-            if (isFlat(ring, color)) clearBubble(px, w, h, block.box, color)
+            // A normal bubble: also clear marks the detector missed in it.
+            clearBubble(px, w, h, block.box, color)
         }
     }
 
@@ -115,7 +121,8 @@ class PageRenderer(private val targetLang: String) {
     private fun layout(px: IntArray, w: Int, h: Int, blocks: List<TextBlock>): List<Rect> {
         val regions = blocks.map { bubbleRegion(px, w, h, it.box) }
         return blocks.mapIndexed { i, block ->
-            val region = regions[i] ?: return@mapIndexed Rect(block.box).apply { inset(-4, -4) }
+            val region = regions[i]
+            if (region == null || block.onArt) return@mapIndexed Rect(block.box).apply { inset(-4, -4) }
             val area = region.mask.copyOf()
             val others = blocks.filterIndexed { j, other ->
                 j != i && region.contains(other.box.centerX(), other.box.centerY())
@@ -196,12 +203,13 @@ class PageRenderer(private val targetLang: String) {
                 size -= 2
                 layout = build(text, paint, size, rect.width())
             }
-            val dark = averageLuma(px, w, rect) < 110
+            // On artwork always white text with a heavy outline, like scanlated sound effects.
+            val dark = block.onArt || averageLuma(px, w, rect) < 110
             val top = rect.top + (rect.height() - layout.height) / 2f
             canvas.save()
             canvas.translate(rect.left.toFloat(), top)
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = max(2f, size / 6f)
+            paint.strokeWidth = if (block.onArt) max(3f, size / 4f) else max(2f, size / 6f)
             paint.strokeJoin = Paint.Join.ROUND
             paint.color = if (dark) Color.BLACK else Color.WHITE
             layout.draw(canvas)

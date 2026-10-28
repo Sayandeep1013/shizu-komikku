@@ -286,6 +286,6 @@ class LiveTranslator(
         private const val NETWORK_SLOTS = 3
         private const val CONTEXT_PAIRS = 12
         private const val MAX_CACHE_BYTES = 300L * 1024 * 1024
-        private const val CACHE_VERSION = "3"
+        private const val CACHE_VERSION = "4"
     }
 }

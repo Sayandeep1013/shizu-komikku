@@ -51,6 +51,9 @@ class TextBlock(
     val minConfidence: Float get() = lines.minOf { if (it.junk) 0f else it.confidence }
 
     val hasTranslation: Boolean get() = !translation.isNullOrBlank()
+
+    /** Set by the renderer when the text sits on artwork rather than in a bubble. */
+    var onArt: Boolean = false
 }
 
 /**

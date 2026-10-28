@@ -75,7 +75,7 @@ enum class Provider(
         "gemini",
         "Google Gemini",
         "https://generativelanguage.googleapis.com/v1beta/openai",
-        "gemini-3.8-flash",
+        "gemini-3.6-flash",
         true,
     ),
     OPENROUTER("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "deepseek/deepseek-v4.1-flash", true),
