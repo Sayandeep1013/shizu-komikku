@@ -1,0 +1,86 @@
+name: Shizu build
+on:
+  push:
+    branches-ignore:
+      - master
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 75
+
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          java-version-file: .github/.java-version
+          distribution: temurin
+
+      - name: Set up gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+
+      # Formatting problems are reported (with a patch) but don't block the APK.
+      - name: Check code format
+        id: spotless
+        continue-on-error: true
+        run: ./gradlew spotlessCheck
+
+      - name: Make formatting patch
+        if: steps.spotless.outcome == 'failure'
+        run: |
+          ./gradlew spotlessApply
+          git diff > spotless.patch
+          git diff --stat
+
+      - name: Upload formatting patch
+        if: steps.spotless.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: spotless-patch
+          path: spotless.patch
+
+      - name: Undo formatting changes
+        if: steps.spotless.outcome == 'failure'
+        run: git checkout -- .
+
+      - name: Build app
+        run: ./gradlew assemblePreview -Pdisable-code-shrink
+
+      # Re-sign with a stable key so each new build installs over the previous one.
+      - name: Sign APK
+        env:
+          KEYSTORE_B64: ${{ secrets.SHIZU_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SHIZU_KEYSTORE_PASSWORD }}
+        run: |
+          set -e
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/shizu.p12"
+          build_tools=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          apk=$(ls app/build/outputs/apk/preview/*universal*.apk | head -1)
+          out="Shizu-Komikku-r${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}.apk"
+          "$ANDROID_HOME/build-tools/$build_tools/apksigner" sign \
+            --ks "$RUNNER_TEMP/shizu.p12" --ks-type PKCS12 --ks-key-alias shizu \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD \
+            --out "$out" "$apk"
+          "$ANDROID_HOME/build-tools/$build_tools/apksigner" verify --print-certs "$out" | head -3
+          rm -f "$RUNNER_TEMP/shizu.p12"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Shizu-Komikku-r${{ github.run_number }}
+          path: ./*.apk
+          retention-days: 14

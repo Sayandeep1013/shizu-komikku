@@ -19,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import logcat.LogPriority
@@ -123,7 +124,11 @@ class PagerPageHolder(
             launchIO {
                 loader.loadPage(page)
             }
-            page.statusFlow.collectLatest { state ->
+            // KMK -->
+            // Re-run when a live translation arrives so the translated image replaces the original in place.
+            val states = combine(page.statusFlow, page.translatedStream) { state, _ -> state }
+            // KMK <--
+            /* KMK --> */ states /* KMK <-- */.collectLatest { state ->
                 when (state) {
                     Page.State.Queue -> setQueued()
                     Page.State.LoadPage -> setLoading()
@@ -177,8 +182,8 @@ class PagerPageHolder(
             progressIndicator?.setProgress(95)
         }
 
-        val streamFn = page.stream ?: return
-        val streamFn2 = extraPage?.stream
+        val streamFn = /* KMK --> */ page.translatedStream.value ?: /* KMK <-- */ page.stream ?: return
+        val streamFn2 = /* KMK --> */ extraPage?.translatedStream?.value ?: /* KMK <-- */ extraPage?.stream
 
         try {
             val (source, isAnimated, background) = withIOContext {

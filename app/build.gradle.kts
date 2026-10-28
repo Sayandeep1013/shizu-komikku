@@ -297,6 +297,8 @@ dependencies {
     implementation(libs.materialKolor)
 
     // KMK -->
+    // On-device text recognition for live translation
+    implementation(libs.bundles.mlkit.text)
     implementation(libs.palette.ktx)
     implementation(libs.haze)
     implementation(compose.colorpicker)

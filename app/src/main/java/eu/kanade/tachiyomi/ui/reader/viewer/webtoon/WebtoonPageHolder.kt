@@ -22,6 +22,7 @@ import eu.kanade.tachiyomi.util.system.dpToPx
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import logcat.LogPriority
@@ -141,7 +142,11 @@ class WebtoonPageHolder(
             launchIO {
                 loader.loadPage(page)
             }
-            page.statusFlow.collectLatest { state ->
+            // KMK -->
+            // Re-run when a live translation arrives so the translated image replaces the original in place.
+            val states = combine(page.statusFlow, page.translatedStream) { state, _ -> state }
+            // KMK <--
+            /* KMK --> */ states /* KMK <-- */.collectLatest { state ->
                 when (state) {
                     Page.State.Queue -> setQueued()
                     Page.State.LoadPage -> setLoading()
@@ -191,7 +196,7 @@ class WebtoonPageHolder(
     private suspend fun setImage() {
         progressIndicator.setProgress(0)
 
-        val streamFn = page?.stream ?: return
+        val streamFn = /* KMK --> */ page?.translatedStream?.value ?: /* KMK <-- */ page?.stream ?: return
 
         try {
             val (source, isAnimated) = withIOContext {

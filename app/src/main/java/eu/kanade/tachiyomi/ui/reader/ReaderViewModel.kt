@@ -75,6 +75,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import logcat.LogPriority
+import mihon.feature.translation.LiveTranslator
 import tachiyomi.core.common.preference.toggle
 import tachiyomi.core.common.storage.UniFileTempFileManager
 import tachiyomi.core.common.util.lang.launchIO
@@ -348,6 +349,10 @@ class ReaderViewModel @JvmOverloads constructor(
     val incognitoMode: Boolean by lazy { getIncognitoState.await(manga?.source) }
     private val downloadAheadAmount = downloadPreferences.autoDownloadWhileReading().get()
 
+    // KMK -->
+    private val liveTranslator = LiveTranslator(viewModelScope)
+    // KMK <--
+
     init {
         // To save state
         state.map { it.viewerChapters?.currChapter }
@@ -387,6 +392,9 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     override fun onCleared() {
+        // KMK -->
+        liveTranslator.close()
+        // KMK <--
         val currentChapters = state.value.viewerChapters
         if (currentChapters != null) {
             currentChapters.unref()
@@ -700,6 +708,10 @@ class ReaderViewModel @JvmOverloads constructor(
         if (inDownloadRange) {
             downloadNextChapters()
         }
+
+        // KMK -->
+        liveTranslator.onPageSelected(page)
+        // KMK <--
 
         eventChannel.trySend(Event.PageChanged)
     }
