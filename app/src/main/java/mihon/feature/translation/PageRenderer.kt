@@ -186,7 +186,7 @@ class PageRenderer(private val targetLang: String) {
             typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
         }
         for ((block, rect) in blocks.zip(rects)) {
-            val text = block.translation.trim()
+            val text = block.translation?.trim().orEmpty()
             if (text.isEmpty() || rect.width() < 8 || rect.height() < 8) continue
             val glyph = block.lines.map { min(it.box.width(), it.box.height()) }.sorted()[block.lines.size / 2]
             val cap = (glyph * 1.2f).toInt().coerceIn(14, 72)

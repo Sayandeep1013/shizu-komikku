@@ -68,7 +68,7 @@ object SettingsTranslationScreen : SearchableSettings {
                 ),
                 Preference.PreferenceItem.SliderPreference(
                     value = lookahead,
-                    valueRange = 1..5,
+                    valueRange = 1..10,
                     title = stringResource(KMR.strings.pref_translation_lookahead),
                     valueString = lookahead.toString(),
                     onValueChanged = { prefs.lookahead().set(it) },

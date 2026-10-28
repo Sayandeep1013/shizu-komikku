@@ -19,8 +19,11 @@ data class TextLine(
     val text: String,
     val confidence: Float,
 ) {
-    /** Detected but unreadable: still erased when it shares a bubble with real text. */
-    val junk: Boolean get() = confidence < JUNK_CONFIDENCE || text.none { it.isLetter() }
+    /**
+     * Not text (no letters: hatching, borders, "!!"), or a single unsure glyph. Low-confidence lines
+     * with real letters are kept: the vision re-read fixes them instead of dropping them.
+     */
+    val junk: Boolean get() = text.none { it.isLetter() } || (confidence < JUNK_CONFIDENCE && text.length <= 1)
 
     val vertical: Boolean get() = box.height() > 1.5f * box.width() && text.length > 1
 
@@ -34,7 +37,8 @@ class TextBlock(
     val vertical: Boolean,
     var text: String,
 ) {
-    var translation: String = ""
+    /** Null until translated; null after translation means "leave this bubble untouched". */
+    var translation: String? = null
 
     val box: Rect = Rect(
         lines.minOf { it.box.left },
@@ -43,8 +47,10 @@ class TextBlock(
         lines.maxOf { it.box.bottom },
     )
 
-    /** Lowest line confidence; an unreadable line counts as 0 so the block gets re-read. */
+    /** Lowest line confidence; a junk line inside a real bubble counts as 0 so the block gets re-read. */
     val minConfidence: Float get() = lines.minOf { if (it.junk) 0f else it.confidence }
+
+    val hasTranslation: Boolean get() = !translation.isNullOrBlank()
 }
 
 /**

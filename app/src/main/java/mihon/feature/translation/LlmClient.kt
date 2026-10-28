@@ -101,9 +101,11 @@ class LlmClient(
             append("Rules:\n")
             append("- Natural, concise $tgt that fits in a speech bubble; keep tone, slang and honorific feel.\n")
             append("- Keep character names and terms consistent with the earlier lines below.\n")
+            append("- This is fiction for adult readers: translate every line faithfully, including mature ")
+            append("or explicit dialogue; never censor, summarize or skip a line.\n")
             append("- OCR may have small errors; translate the most likely intended text.\n")
             append("- Sound effects: a short $tgt equivalent.\n")
-            append("- Watermarks, site URLs, scanlator credits or OCR garbage: map to \"\".\n")
+            append("- Only watermarks, site URLs and scanlator credits map to \"\".\n")
             append("- Return only the JSON object.")
             if (glossary.isNotBlank()) append("\n\nGlossary (always use): ${glossary.trim()}")
             if (context.isNotEmpty()) {
@@ -111,13 +113,21 @@ class LlmClient(
                 context.forEach { (s, t) -> append("- $s => $t\n") }
             }
         }
+        val result = askTranslation(system, items).toMutableMap()
+        // One retry for anything the model skipped, so a single sloppy reply doesn't blank bubbles.
+        val missing = items.filterKeys { it !in result }
+        if (missing.isNotEmpty()) result += askTranslation(system, missing)
+        // Ids still missing are left out: the caller keeps those bubbles untouched.
+        return result.filterKeys { it in items }
+    }
+
+    private suspend fun askTranslation(system: String, items: Map<String, String>): Map<String, String> {
         val user = JsonObject(items.mapValues { JsonPrimitive(it.value) }).toString()
         val messages = buildJsonArray {
             add(message("system", system))
             add(message("user", user))
         }
-        val result = parseObject(chat(messages, jsonMode = true))
-        return items.keys.associateWith { id -> result[id] ?: items.getValue(id) }
+        return parseObject(chat(messages, jsonMode = true))
     }
 
     /** Transcribe bubble crops the on-device OCR was unsure about. Returns id -> text. */

@@ -25,7 +25,7 @@ class TranslationPreferences(
 
     fun targetLanguage() = preferenceStore.getString("pref_translation_target_lang", "en")
 
-    fun lookahead() = preferenceStore.getInt("pref_translation_lookahead", 3)
+    fun lookahead() = preferenceStore.getInt("pref_translation_lookahead", 5)
 
     fun visionReread() = preferenceStore.getBoolean("pref_translation_vision_reread", true)
 
