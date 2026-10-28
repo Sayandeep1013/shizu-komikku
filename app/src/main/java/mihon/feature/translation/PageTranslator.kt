@@ -3,7 +3,9 @@ package mihon.feature.translation
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import java.io.ByteArrayOutputStream
 
 /**
@@ -19,23 +21,25 @@ class PageResult(
 )
 
 /**
- * detect (on device) -> optional vision re-read -> translate (LLM) -> erase + letter (on device).
+ * detect (on device) -> translate, with crops of unsure bubbles for vision models (one LLM call)
+ * -> erase + letter (on device).
  *
- * CPU-heavy steps share [deviceLock] so only one page uses the CPU at a time while other pages
- * wait on the network.
+ * CPU-heavy steps share [deviceLock] so only one page uses the CPU at a time; [networkSlots]
+ * limits concurrent LLM calls and is held only for the call itself.
  */
 class PageTranslator(
-    private val llm: LlmClient,
-    private val endpoint: Endpoint,
+    private val router: LlmRouter,
     private val sourceLang: String,
     private val targetLang: String,
     private val visionReread: Boolean,
     private val glossary: String,
     private val deviceLock: Mutex,
+    private val networkSlots: Semaphore,
 ) {
     private val detector by lazy { TextDetector(sourceLang) }
 
-    suspend fun translate(bytes: ByteArray, context: List<Pair<String, String>>): PageResult {
+    /** [priority] requests (the user tapped translate) skip the network queue. */
+    suspend fun translate(bytes: ByteArray, context: List<Pair<String, String>>, priority: Boolean): PageResult {
         val t0 = System.currentTimeMillis()
         val (bitmap, blocks) = deviceLock.withLock {
             val bitmap = decode(bytes) ?: return PageResult(null, emptyList(), noText = false, stats = "undecodable")
@@ -46,33 +50,32 @@ class PageTranslator(
             val size = "${bitmap.width}x${bitmap.height}"
             if (blocks.isEmpty()) return PageResult(null, emptyList(), noText = true, stats = "$size blocks=0 ocr=${ocrMs}ms")
 
-            var reread = 0
-            var rereadBlank = 0
-            if (visionReread && endpoint.provider.supportsVision) {
-                val unsure = blocks.filter { it.minConfidence < REREAD_BELOW }
-                if (unsure.isNotEmpty()) {
-                    val crops = unsure.mapIndexed { i, b -> "c$i" to crop(bitmap, b) }
-                    val read = llm.readCrops(crops, sourceLang)
-                    unsure.forEachIndexed { i, b ->
-                        // A blank or refused re-read must never wipe what OCR already found.
-                        val text = read["c$i"]
-                        if (text.isNullOrBlank()) rereadBlank++ else b.text = text
-                    }
-                    reread = unsure.size
+            val ids = blocks.withIndex().filter { it.value.text.isNotBlank() }.associate { "b${it.index}" to it.value }
+            val crops = if (visionReread) {
+                deviceLock.withLock {
+                    ids.filterValues { it.minConfidence < REREAD_BELOW }.mapValues { crop(bitmap, it.value) }
+                }
+            } else {
+                emptyMap()
+            }
+
+            val t1 = System.currentTimeMillis()
+            var usedProvider = ""
+            val request: suspend () -> Map<String, String> = {
+                router.run { client ->
+                    usedProvider = client.endpoint.provider.id
+                    client.translate(ids.mapValues { it.value.text }, crops, sourceLang, targetLang, context, glossary)
                 }
             }
-            val t1 = System.currentTimeMillis()
-
-            val ids = blocks.withIndex().filter { it.value.text.isNotBlank() }.associate { "b${it.index}" to it.value }
-            val translated = llm.translate(ids.mapValues { it.value.text }, sourceLang, targetLang, context, glossary)
+            val translated = if (priority) request() else networkSlots.withPermit { request() }
             ids.forEach { (id, block) -> block.translation = translated[id] }
             val llmMs = System.currentTimeMillis() - t1
 
             val lettered = blocks.filter { it.hasTranslation }
             val stats = "$size blocks=${blocks.size} lines=${blocks.sumOf { it.lines.size }} " +
-                "minConf=${"%.2f".format(blocks.minOf { it.minConfidence })} reread=$reread blankReread=$rereadBlank " +
+                "minConf=${"%.2f".format(blocks.minOf { it.minConfidence })} crops=${crops.size} " +
                 "translated=${lettered.size} missing=${ids.size - translated.size} " +
-                "empty=${translated.count { it.value.isBlank() }} ocr=${ocrMs}ms llm=${llmMs}ms"
+                "empty=${translated.count { it.value.isBlank() }} via=$usedProvider ocr=${ocrMs}ms llm=${llmMs}ms"
             if (lettered.isEmpty()) return PageResult(null, emptyList(), noText = false, stats = stats)
 
             return deviceLock.withLock {
@@ -121,7 +124,7 @@ class PageTranslator(
     }
 
     companion object {
-        /** ML Kit line confidence below this sends the bubble to the vision model. */
+        /** ML Kit line confidence below this sends the bubble's crop along for the vision model. */
         private const val REREAD_BELOW = 0.7f
         private const val JPEG_QUALITY = 92
         private const val MAX_PIXELS = 40_000_000L

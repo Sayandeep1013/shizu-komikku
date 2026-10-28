@@ -12,9 +12,11 @@ import eu.kanade.presentation.more.settings.Preference
 import eu.kanade.tachiyomi.network.NetworkHelper
 import eu.kanade.tachiyomi.util.system.toast
 import kotlinx.collections.immutable.persistentListOf
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.toImmutableMap
 import kotlinx.coroutines.launch
 import mihon.feature.translation.LlmClient
+import mihon.feature.translation.LlmRouter
 import mihon.feature.translation.Provider
 import mihon.feature.translation.TranslationPreferences
 import tachiyomi.core.common.i18n.stringResource
@@ -37,11 +39,13 @@ object SettingsTranslationScreen : SearchableSettings {
     @Composable
     override fun getPreferences(): List<Preference> {
         val prefs = remember { Injekt.get<TranslationPreferences>() }
-        return listOf(
-            getReadingGroup(prefs),
-            getProviderGroup(prefs),
-            Preference.PreferenceItem.InfoPreference(stringResource(KMR.strings.pref_translation_info)),
-        )
+        return buildList {
+            add(getReadingGroup(prefs))
+            add(getProvidersGroup(prefs))
+            Provider.entries.forEach { add(getProviderGroup(prefs, it)) }
+            add(Preference.PreferenceItem.InfoPreference(stringResource(KMR.strings.pref_translation_button_info)))
+            add(Preference.PreferenceItem.InfoPreference(stringResource(KMR.strings.pref_translation_info)))
+        }
     }
 
     @Composable
@@ -73,6 +77,11 @@ object SettingsTranslationScreen : SearchableSettings {
                     valueString = lookahead.toString(),
                     onValueChanged = { prefs.lookahead().set(it) },
                 ),
+                Preference.PreferenceItem.SwitchPreference(
+                    preference = prefs.visionReread(),
+                    title = stringResource(KMR.strings.pref_translation_vision_reread),
+                    subtitle = stringResource(KMR.strings.pref_translation_vision_reread_summary),
+                ),
                 Preference.PreferenceItem.EditTextPreference(
                     preference = prefs.glossary(),
                     title = stringResource(KMR.strings.pref_translation_glossary),
@@ -83,19 +92,7 @@ object SettingsTranslationScreen : SearchableSettings {
     }
 
     @Composable
-    private fun getProviderGroup(prefs: TranslationPreferences): Preference.PreferenceGroup {
-        val context = LocalContext.current
-        val scope = rememberCoroutineScope()
-        val providerId by prefs.provider().collectAsState()
-        val provider = Provider.fromId(providerId)
-        val keyPref = remember(provider) { prefs.apiKey(provider) }
-        val modelPref = remember(provider) { prefs.model(provider) }
-        val urlPref = remember(provider) { prefs.baseUrl(provider) }
-        val key by keyPref.collectAsState()
-        val model by modelPref.collectAsState()
-        val url by urlPref.collectAsState()
-        var testing by remember { mutableStateOf(false) }
-
+    private fun getProvidersGroup(prefs: TranslationPreferences): Preference.PreferenceGroup {
         return Preference.PreferenceGroup(
             title = stringResource(KMR.strings.pref_translation_group_provider),
             preferenceItems = persistentListOf(
@@ -104,11 +101,45 @@ object SettingsTranslationScreen : SearchableSettings {
                     entries = Provider.entries.associate { it.id to it.label }.toImmutableMap(),
                     title = stringResource(KMR.strings.pref_translation_provider),
                 ),
+                Preference.PreferenceItem.SwitchPreference(
+                    preference = prefs.fallbackEnabled(),
+                    title = stringResource(KMR.strings.pref_translation_fallback),
+                    subtitle = stringResource(KMR.strings.pref_translation_fallback_summary),
+                ),
+            ),
+        )
+    }
+
+    @Composable
+    private fun getProviderGroup(prefs: TranslationPreferences, provider: Provider): Preference.PreferenceGroup {
+        val context = LocalContext.current
+        val scope = rememberCoroutineScope()
+        val keyPref = remember(provider) { prefs.apiKey(provider) }
+        val modelPref = remember(provider) { prefs.model(provider) }
+        val urlPref = remember(provider) { prefs.baseUrl(provider) }
+        val key by keyPref.collectAsState()
+        val model by modelPref.collectAsState()
+        val url by urlPref.collectAsState()
+        var testing by remember(provider) { mutableStateOf(false) }
+
+        val items = buildList<Preference.PreferenceItem<out Any, out Any>> {
+            if (provider == Provider.CUSTOM) {
+                add(
+                    Preference.PreferenceItem.EditTextPreference(
+                        preference = urlPref,
+                        title = stringResource(KMR.strings.pref_translation_base_url),
+                        subtitle = url.ifBlank { stringResource(KMR.strings.pref_translation_custom_url_hint) },
+                    ),
+                )
+            }
+            add(
                 Preference.PreferenceItem.EditTextPreference(
                     preference = keyPref,
                     title = stringResource(KMR.strings.pref_translation_api_key),
                     subtitle = maskKey(key) ?: stringResource(KMR.strings.pref_translation_api_key_not_set),
                 ),
+            )
+            add(
                 Preference.PreferenceItem.EditTextPreference(
                     preference = modelPref,
                     title = stringResource(KMR.strings.pref_translation_model),
@@ -116,23 +147,13 @@ object SettingsTranslationScreen : SearchableSettings {
                         stringResource(KMR.strings.pref_translation_default_value, provider.defaultModel)
                     },
                 ),
-                Preference.PreferenceItem.EditTextPreference(
-                    preference = urlPref,
-                    title = stringResource(KMR.strings.pref_translation_base_url),
-                    subtitle = url.ifBlank {
-                        stringResource(KMR.strings.pref_translation_default_value, provider.defaultBaseUrl)
-                    },
-                ),
-                Preference.PreferenceItem.SwitchPreference(
-                    preference = prefs.visionReread(),
-                    title = stringResource(KMR.strings.pref_translation_vision_reread),
-                    subtitle = stringResource(KMR.strings.pref_translation_vision_reread_summary),
-                ),
+            )
+            add(
                 Preference.PreferenceItem.TextPreference(
                     title = stringResource(
                         if (testing) KMR.strings.pref_translation_testing else KMR.strings.pref_translation_test,
                     ),
-                    enabled = !testing,
+                    enabled = !testing && prefs.isUsable(provider),
                     onClick = {
                         testing = true
                         scope.launch {
@@ -148,7 +169,7 @@ object SettingsTranslationScreen : SearchableSettings {
                                 } catch (e: Exception) {
                                     context.stringResource(
                                         KMR.strings.pref_translation_test_failed,
-                                        e.message ?: e::class.java.simpleName,
+                                        LlmRouter.shortReason(e),
                                     )
                                 }
                             }
@@ -157,7 +178,11 @@ object SettingsTranslationScreen : SearchableSettings {
                         }
                     },
                 ),
-            ),
+            )
+        }
+        return Preference.PreferenceGroup(
+            title = provider.label,
+            preferenceItems = items.toImmutableList(),
         )
     }
 

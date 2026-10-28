@@ -31,7 +31,24 @@ class TranslationPreferences(
 
     fun glossary() = preferenceStore.getString("pref_translation_glossary", "")
 
+    /** When the primary provider fails, try the other providers that have a key. */
+    fun fallbackEnabled() = preferenceStore.getBoolean("pref_translation_fallback", true)
+
     fun currentProvider(): Provider = Provider.fromId(provider().get())
+
+    /** A provider can be used once it has a key (custom servers need a base URL instead). */
+    fun isUsable(provider: Provider): Boolean = when (provider) {
+        Provider.CUSTOM -> baseUrl(provider).get().isNotBlank()
+        else -> apiKey(provider).get().isNotBlank()
+    }
+
+    /** Usable providers, primary first, then the rest as fallbacks (if enabled). */
+    fun endpoints(): List<Endpoint> {
+        val primary = currentProvider()
+        val order = listOf(primary) + Provider.entries.filter { it != primary }
+        val usable = order.filter(::isUsable).map(::endpoint)
+        return if (fallbackEnabled().get()) usable else usable.take(1).filter { it.provider == primary }
+    }
 
     fun endpoint(provider: Provider = currentProvider()) = Endpoint(
         provider = provider,

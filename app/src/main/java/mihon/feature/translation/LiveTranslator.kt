@@ -13,11 +13,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import tachiyomi.core.common.i18n.stringResource
 import tachiyomi.core.common.util.lang.withUIContext
 import tachiyomi.i18n.kmk.KMR
@@ -34,6 +36,9 @@ import java.util.concurrent.ConcurrentHashMap
  * (online or downloaded); finished pages are published through [ReaderPage.translatedStream]
  * and the page holders swap the image in place, so the text is part of the page pixels and
  * stays put while scrolling or zooming. Results are cached on disk by image content.
+ *
+ * Every page carries a [TranslationStatus] for the reader's translate button, which also lets
+ * the user force a page ([translateNow]) or flip between original and translation ([toggleOriginal]).
  */
 class LiveTranslator(
     private val scope: CoroutineScope,
@@ -44,15 +49,25 @@ class LiveTranslator(
     private val cacheDir = File(app.cacheDir, "live_translation").apply { mkdirs() }
     private val jobs = ConcurrentHashMap<ReaderPage, Job>()
     private val deviceLock = Mutex()
-    private val networkSlots = Semaphore(2)
+    private val networkSlots = Semaphore(NETWORK_SLOTS)
     private val recentPairs = ArrayDeque<Pair<String, String>>()
     private var windowJob: Job? = null
     private var translator: PageTranslator? = null
     private var translatorKey: String? = null
     private val reportedErrors: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    private val _currentPage = MutableStateFlow<ReaderPage?>(null)
+
+    /** The page the reader is on, for the translate button. */
+    val currentPage: StateFlow<ReaderPage?> = _currentPage.asStateFlow()
+
+    /** True when at least one provider has a key, i.e. the button can do something. */
+    fun isConfigured(): Boolean = preferences.endpoints().isNotEmpty()
+
     fun onPageSelected(page: ReaderPage) {
-        if (page is InsertPage || !preferences.liveTranslation().get()) return
+        if (page is InsertPage) return
+        _currentPage.value = page
+        if (!preferences.liveTranslation().get()) return
         windowJob?.cancel()
         windowJob = scope.launch {
             // Debounce flings: only translate where the reader settles.
@@ -66,50 +81,105 @@ class LiveTranslator(
             // only work far from the reading position is dropped.
             jobs.keys
                 .filter { it.chapter != page.chapter || it.index < first - KEEP_BEHIND || it.index > last + KEEP_BEHIND }
-                .forEach { jobs.remove(it)?.cancel() }
+                .forEach { stale ->
+                    jobs.remove(stale)?.cancel()
+                    if (stale.translationStatus.value == TranslationStatus.Queued) {
+                        stale.translationStatus.value = TranslationStatus.Idle
+                    }
+                }
 
             for (index in first..last) {
                 val target = pages[index]
                 if (target.translatedStream.value != null || jobs[target]?.isActive == true) continue
-                jobs[target] = scope.launch(Dispatchers.IO) { translatePage(target) }
+                // Auto mode doesn't hammer a page that just failed; the button retries it.
+                if (target.translationStatus.value is TranslationStatus.Failed && index != first) continue
+                launchPage(target, force = false)
             }
             xLogW("window: page ${page.number}..${last + 1} of ${pages.size}, active jobs ${jobs.size}")
         }
     }
 
-    private suspend fun translatePage(page: ReaderPage) {
+    /** The user tapped translate: run this page now, ahead of the queue, ignoring "no text" memory. */
+    fun translateNow(page: ReaderPage) {
+        if (page.translatedImage != null) {
+            showTranslated(page)
+            return
+        }
+        if (jobs[page]?.isActive == true && page.translationStatus.value == TranslationStatus.Working) return
+        jobs.remove(page)?.cancel()
+        launchPage(page, force = true)
+    }
+
+    /** Flip between the original page and its translation (long-press on the button). */
+    fun toggleOriginal(page: ReaderPage) {
+        val translated = page.translatedImage ?: return
+        if (page.translatedStream.value != null) {
+            page.translatedStream.value = null
+            page.translationStatus.value = TranslationStatus.ShowingOriginal
+        } else {
+            page.translatedStream.value = translated
+            page.translationStatus.value = TranslationStatus.Done
+        }
+    }
+
+    private fun showTranslated(page: ReaderPage) {
+        page.translatedStream.value = page.translatedImage
+        page.translationStatus.value = TranslationStatus.Done
+    }
+
+    private fun launchPage(page: ReaderPage, force: Boolean) {
+        page.translationStatus.value = TranslationStatus.Queued
+        jobs[page] = scope.launch(Dispatchers.IO) { translatePage(page, force) }
+    }
+
+    private suspend fun translatePage(page: ReaderPage, force: Boolean) {
         val started = System.currentTimeMillis()
         try {
             page.statusFlow.first { it == Page.State.Ready }
             val stream = page.stream ?: return
             val bytes = stream().use { it.readBytes() }
-            val pageTranslator = currentTranslator() ?: return
+            val pageTranslator = currentTranslator()
+            if (pageTranslator == null) {
+                page.translationStatus.value = TranslationStatus.Failed(app.stringResource(KMR.strings.translation_no_key))
+                return
+            }
 
             val key = cacheKey(bytes)
             val cached = File(cacheDir, "$key.jpg")
             val noText = File(cacheDir, "$key.none")
-            if (noText.exists()) {
-                xLogW("page ${page.number}: cached as no-text")
-                return
-            }
             if (cached.exists()) {
                 cached.setLastModified(System.currentTimeMillis())
-                page.translatedStream.value = { cached.inputStream() }
+                publish(page, cached)
                 xLogW("page ${page.number}: from cache")
                 return
             }
-
-            val result = networkSlots.withPermit {
-                pageTranslator.translate(bytes, synchronized(recentPairs) { recentPairs.toList() })
+            if (noText.exists() && !force) {
+                page.translationStatus.value = TranslationStatus.NoText
+                xLogW("page ${page.number}: cached as no-text")
+                return
             }
+
+            page.translationStatus.value = TranslationStatus.Working
+            val result = pageTranslator.translate(
+                bytes,
+                synchronized(recentPairs) { recentPairs.toList() },
+                priority = force,
+            )
             // Numbers only: page content is never logged.
             xLogW("page ${page.number}: ${result.stats} total=${System.currentTimeMillis() - started}ms")
             val image = result.image
             if (image == null) {
                 // Only remember pages that truly have no text; a failed translation is retried next time.
-                if (result.noText) noText.createNewFile()
+                if (result.noText) {
+                    noText.createNewFile()
+                    page.translationStatus.value = TranslationStatus.NoText
+                } else {
+                    page.translationStatus.value =
+                        TranslationStatus.Failed(app.stringResource(KMR.strings.translation_nothing_translated))
+                }
                 return
             }
+            noText.delete()
             val tmp = File(cacheDir, "$key.tmp")
             tmp.writeBytes(image)
             tmp.renameTo(cached)
@@ -119,27 +189,35 @@ class LiveTranslator(
                     if (recentPairs.size > CONTEXT_PAIRS) recentPairs.removeFirst()
                 }
             }
-            page.translatedStream.value = { cached.inputStream() }
+            publish(page, cached)
             trimCache()
         } catch (e: CancellationException) {
             xLogW("page ${page.number}: cancelled after ${System.currentTimeMillis() - started}ms")
             throw e
         } catch (e: Throwable) {
             xLogE("Live translation failed for page ${page.number}", e)
-            val message = e.message ?: e::class.java.simpleName
-            if (reportedErrors.add(message)) {
-                withUIContext { app.toast(app.stringResource(KMR.strings.translation_failed, message)) }
+            val reason = LlmRouter.shortReason(e)
+            page.translationStatus.value = TranslationStatus.Failed(reason)
+            if (reportedErrors.add(reason)) {
+                withUIContext { app.toast(app.stringResource(KMR.strings.translation_failed, reason)) }
             }
         } finally {
             jobs.remove(page)
         }
     }
 
-    /** Rebuilt when provider, model, key or languages change in settings. */
+    private fun publish(page: ReaderPage, file: File) {
+        val image: () -> java.io.InputStream = { file.inputStream() }
+        page.translatedImage = image
+        page.translatedStream.value = image
+        page.translationStatus.value = TranslationStatus.Done
+    }
+
+    /** Rebuilt when providers, keys, models or languages change in settings. */
     @Synchronized
     private fun currentTranslator(): PageTranslator? {
-        val endpoint = preferences.endpoint()
-        if (endpoint.apiKey.isEmpty() && endpoint.provider != Provider.CUSTOM) {
+        val endpoints = preferences.endpoints()
+        if (endpoints.isEmpty()) {
             if (reportedErrors.add("no-key")) {
                 scope.launch { withUIContext { app.toast(KMR.strings.translation_missing_key) } }
             }
@@ -149,18 +227,18 @@ class LiveTranslator(
         val target = preferences.targetLanguage().get()
         val vision = preferences.visionReread().get()
         val glossary = preferences.glossary().get()
-        val key = listOf(endpoint.signature, endpoint.baseUrl, endpoint.apiKey, source, target, vision, glossary)
+        val key = (endpoints.map { "${it.signature}|${it.baseUrl}|${it.apiKey}" } + listOf(source, target, "$vision", glossary))
             .joinToString("|")
         if (key != translatorKey) {
             translator?.close()
             translator = PageTranslator(
-                llm = LlmClient(network.client, endpoint),
-                endpoint = endpoint,
+                router = LlmRouter(network.client, endpoints),
                 sourceLang = source,
                 targetLang = target,
                 visionReread = vision,
                 glossary = glossary,
                 deviceLock = deviceLock,
+                networkSlots = networkSlots,
             )
             translatorKey = key
             synchronized(recentPairs) { recentPairs.clear() }
@@ -172,7 +250,6 @@ class LiveTranslator(
         val digest = MessageDigest.getInstance("SHA-1")
         digest.update(bytes)
         val settings = listOf(
-            preferences.endpoint().signature,
             preferences.sourceLanguage().get(),
             preferences.targetLanguage().get(),
             preferences.glossary().get(),
@@ -205,8 +282,9 @@ class LiveTranslator(
         private const val DEBOUNCE_MS = 150L
         private const val MAX_LOOKAHEAD = 10
         private const val KEEP_BEHIND = 5
+        private const val NETWORK_SLOTS = 3
         private const val CONTEXT_PAIRS = 12
         private const val MAX_CACHE_BYTES = 300L * 1024 * 1024
-        private const val CACHE_VERSION = "2"
+        private const val CACHE_VERSION = "3"
     }
 }

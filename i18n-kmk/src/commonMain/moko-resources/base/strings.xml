@@ -242,7 +242,7 @@
     <string name="pref_category_translation">Translation</string>
     <string name="pref_translation_summary">Live in-panel translation, AI provider, languages</string>
     <string name="pref_translation_group_reading">While reading</string>
-    <string name="pref_translation_group_provider">AI provider</string>
+    <string name="pref_translation_group_provider">AI providers</string>
     <string name="pref_live_translation">Translate pages while reading</string>
     <string name="pref_live_translation_summary">Erases the original text and letters the translation into each bubble, a few pages ahead of where you are</string>
     <string name="pref_translation_source_lang">Original language</string>
@@ -250,13 +250,13 @@
     <string name="pref_translation_lookahead">Pages to translate ahead</string>
     <string name="pref_translation_vision_reread">Re-read unclear text with AI vision</string>
     <string name="pref_translation_vision_reread_summary">Sends crops of bubbles the on-device reader is unsure about. Gemini and OpenRouter only</string>
-    <string name="pref_translation_provider">Provider</string>
+    <string name="pref_translation_provider">Primary provider</string>
     <string name="pref_translation_api_key">API key</string>
     <string name="pref_translation_api_key_not_set">Not set</string>
     <string name="pref_translation_model">Model</string>
     <string name="pref_translation_base_url">Base URL</string>
     <string name="pref_translation_default_value">Default: %1$s</string>
-    <string name="pref_translation_test">Test API key</string>
+    <string name="pref_translation_test">Test this provider</string>
     <string name="pref_translation_testing">Testing…</string>
     <string name="pref_translation_test_ok">Works. %1$s replied: %2$s</string>
     <string name="pref_translation_test_failed">Failed: %1$s</string>
@@ -265,4 +265,17 @@
     <string name="pref_translation_info">Text is found and read on your phone. Only the text, plus crops of unclear bubbles if enabled, is sent to the provider you pick, using your own key. Keys stay on this device and are not included in backups.</string>
     <string name="translation_failed">Translation failed: %1$s</string>
     <string name="translation_missing_key">Live translation: add an API key in Settings › Translation</string>
+    <string name="pref_translation_fallback">Use other providers if one fails</string>
+    <string name="pref_translation_fallback_summary">When the primary provider is down, out of credit or refuses, the next provider with a key is used automatically</string>
+    <string name="pref_translation_custom_url_hint">OpenAI-compatible endpoint, e.g. http://192.168.1.5:11434/v1</string>
+    <string name="pref_translation_button_info">In the reader, tap the translate button to translate or retry the current page. Long-press it to switch between the original and the translation.</string>
+    <string name="translation_no_key">No API key</string>
+    <string name="translation_nothing_translated">Nothing translated</string>
+    <string name="translate_button_idle">Translate</string>
+    <string name="translate_button_queued">Queued</string>
+    <string name="translate_button_working">Translating…</string>
+    <string name="translate_button_done">Translated</string>
+    <string name="translate_button_original">Original</string>
+    <string name="translate_button_no_text">No text · tap to retry</string>
+    <string name="translate_button_failed">Failed: %1$s</string>
 </resources>

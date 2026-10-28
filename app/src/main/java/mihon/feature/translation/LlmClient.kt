@@ -4,6 +4,7 @@ import android.util.Base64
 import eu.kanade.tachiyomi.network.await
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -20,22 +21,25 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
-class TranslationException(message: String) : Exception(message)
+/** [code] is the HTTP status when the provider answered with an error, null otherwise. */
+class TranslationException(message: String, val code: Int? = null) : Exception(message)
 
 /**
  * Minimal OpenAI-compatible chat client (Gemini, OpenRouter, DeepSeek and local servers all
- * expose this protocol), plus the two prompts the translator needs.
+ * expose this protocol), plus the translation prompt.
  */
 class LlmClient(
     baseClient: OkHttpClient,
-    private val endpoint: Endpoint,
+    val endpoint: Endpoint,
 ) {
     private val client = baseClient.newBuilder()
-        .readTimeout(120, TimeUnit.SECONDS)
-        .callTimeout(180, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .callTimeout(120, TimeUnit.SECONDS)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    val label: String get() = endpoint.provider.label
 
     suspend fun chat(messages: JsonArray, jsonMode: Boolean = false, temperature: Double = 0.3): String {
         val body = buildJsonObject {
@@ -45,20 +49,20 @@ class LlmClient(
             if (jsonMode) put("response_format", buildJsonObject { put("type", "json_object") })
         }
         val (code, text) = post(body)
-        // Not every model accepts response_format; the prompts ask for JSON anyway.
+        // Not every model accepts response_format; the prompt asks for JSON anyway.
         val (finalCode, finalText) = if (jsonMode && code == 400) {
             post(JsonObject(body - "response_format"))
         } else {
             code to text
         }
         if (finalCode !in 200..299) {
-            throw TranslationException("${endpoint.provider.label}: HTTP $finalCode ${finalText.take(300)}")
+            throw TranslationException("HTTP $finalCode ${errorMessage(finalText)}", finalCode)
         }
         return try {
             json.parseToJsonElement(finalText).jsonObject["choices"]!!.jsonArray[0]
                 .jsonObject["message"]!!.jsonObject["content"]!!.jsonPrimitive.contentOrNull.orEmpty()
         } catch (e: Exception) {
-            throw TranslationException("${endpoint.provider.label}: unexpected reply ${finalText.take(200)}")
+            throw TranslationException("unexpected reply ${finalText.take(120)}")
         }
     }
 
@@ -74,7 +78,19 @@ class LlmClient(
         return client.newCall(request).await().use { it.code to it.body.string() }
     }
 
-    /** Cheap round trip used by the settings "Test API key" button. */
+    /** Pulls the human-readable part out of an OpenAI-style error body. */
+    private fun errorMessage(body: String): String {
+        val message = try {
+            val root = json.parseToJsonElement(body)
+            val obj = (root as? JsonArray)?.firstOrNull() ?: root
+            obj.jsonObject["error"]?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
+        } catch (e: Exception) {
+            null
+        }
+        return (message ?: body).replace('\n', ' ').take(160)
+    }
+
+    /** Cheap round trip used by the settings "Test" buttons. */
     suspend fun test(): String {
         val messages = buildJsonArray { add(message("user", "Reply with exactly: OK")) }
         return chat(messages, temperature = 0.0).trim()
@@ -82,10 +98,12 @@ class LlmClient(
 
     /**
      * Translate one page's bubbles. [context] is recent (source, translation) pairs from earlier
-     * pages so names and tone stay consistent while reading.
+     * pages so names and tone stay consistent. [crops] are images of bubbles whose OCR is unsure;
+     * a vision model reads those itself, in the same request.
      */
     suspend fun translate(
         items: Map<String, String>,
+        crops: Map<String, ByteArray>,
         sourceLang: String,
         targetLang: String,
         context: List<Pair<String, String>>,
@@ -113,57 +131,47 @@ class LlmClient(
                 context.forEach { (s, t) -> append("- $s => $t\n") }
             }
         }
-        val result = askTranslation(system, items).toMutableMap()
+        val useCrops = if (endpoint.provider.supportsVision) crops.filterKeys { it in items } else emptyMap()
+        val result = askTranslation(system, items, useCrops).toMutableMap()
         // One retry for anything the model skipped, so a single sloppy reply doesn't blank bubbles.
         val missing = items.filterKeys { it !in result }
-        if (missing.isNotEmpty()) result += askTranslation(system, missing)
+        if (missing.isNotEmpty()) result += askTranslation(system, missing, useCrops.filterKeys { it in missing })
         // Ids still missing are left out: the caller keeps those bubbles untouched.
         return result.filterKeys { it in items }
     }
 
-    private suspend fun askTranslation(system: String, items: Map<String, String>): Map<String, String> {
-        val user = JsonObject(items.mapValues { JsonPrimitive(it.value) }).toString()
-        val messages = buildJsonArray {
-            add(message("system", system))
-            add(message("user", user))
-        }
-        return parseObject(chat(messages, jsonMode = true))
-    }
-
-    /** Transcribe bubble crops the on-device OCR was unsure about. Returns id -> text. */
-    suspend fun readCrops(crops: List<Pair<String, ByteArray>>, sourceLang: String): Map<String, String> {
-        if (crops.isEmpty()) return emptyMap()
-        val src = languageName(sourceLang)
-        val prompt = "Each image is one speech bubble or caption from a $src comic. " +
-            "Transcribe the $src text exactly as written (no translation), joining lines in reading order. " +
-            "If an image has no real text, use \"\". Return only a JSON object mapping each image id to its text. " +
-            "Image ids in order: ${crops.joinToString { it.first }}"
-        val content = buildJsonArray {
-            add(textPart(prompt))
-            crops.forEach { (id, png) ->
-                add(textPart("Image $id:"))
+    private suspend fun askTranslation(
+        system: String,
+        items: Map<String, String>,
+        crops: Map<String, ByteArray>,
+    ): Map<String, String> {
+        val textJson = JsonObject(items.mapValues { JsonPrimitive(it.value) }).toString()
+        val user: JsonElement = if (crops.isEmpty()) {
+            JsonPrimitive(textJson)
+        } else {
+            buildJsonArray {
                 add(
-                    buildJsonObject {
-                        put("type", "image_url")
-                        put(
-                            "image_url",
-                            buildJsonObject {
-                                put("url", "data:image/png;base64," + Base64.encodeToString(png, Base64.NO_WRAP))
-                            },
-                        )
-                    },
+                    textPart(
+                        "$textJson\n\nThe OCR text is unreliable for ids ${crops.keys.joinToString()}. " +
+                            "Their bubble images follow: read what is actually written in each image and translate that.",
+                    ),
                 )
+                crops.forEach { (id, png) ->
+                    add(textPart("Image for $id:"))
+                    add(imagePart(png))
+                }
             }
         }
         val messages = buildJsonArray {
+            add(message("system", system))
             add(
                 buildJsonObject {
                     put("role", "user")
-                    put("content", content)
+                    put("content", user)
                 },
             )
         }
-        return parseObject(chat(messages, jsonMode = true, temperature = 0.0))
+        return parseObject(chat(messages, jsonMode = true))
     }
 
     private fun parseObject(reply: String): Map<String, String> {
@@ -171,11 +179,11 @@ class LlmClient(
         FENCE.find(text)?.let { text = it.groupValues[1].trim() }
         val start = text.indexOf('{')
         val end = text.lastIndexOf('}')
-        if (start == -1 || end <= start) throw TranslationException("model did not return JSON: ${reply.take(200)}")
+        if (start == -1 || end <= start) throw TranslationException("model did not return JSON: ${reply.take(120)}")
         val obj = try {
             json.parseToJsonElement(text.substring(start, end + 1)).jsonObject
         } catch (e: Exception) {
-            throw TranslationException("model returned invalid JSON: ${reply.take(200)}")
+            throw TranslationException("model returned invalid JSON: ${reply.take(120)}")
         }
         return obj.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { k to it.trim() } }.toMap()
     }
@@ -188,6 +196,14 @@ class LlmClient(
     private fun textPart(text: String) = buildJsonObject {
         put("type", "text")
         put("text", text)
+    }
+
+    private fun imagePart(png: ByteArray) = buildJsonObject {
+        put("type", "image_url")
+        put(
+            "image_url",
+            buildJsonObject { put("url", "data:image/png;base64," + Base64.encodeToString(png, Base64.NO_WRAP)) },
+        )
     }
 
     companion object {

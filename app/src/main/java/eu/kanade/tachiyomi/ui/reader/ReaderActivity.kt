@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -128,6 +129,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import logcat.LogPriority
+import mihon.feature.translation.TranslateButton
 import tachiyomi.core.common.Constants
 import tachiyomi.core.common.i18n.pluralStringResource
 import tachiyomi.core.common.i18n.stringResource
@@ -348,6 +350,18 @@ class ReaderActivity : BaseActivity() {
                 }
 
                 ContentOverlay(state = state)
+
+                // KMK -->
+                if (!state.menuVisible) {
+                    TranslateButton(
+                        translator = viewModel.liveTranslator,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .navigationBarsPadding()
+                            .padding(end = 12.dp, bottom = 40.dp),
+                    )
+                }
+                // KMK <--
 
                 AppBars(state = state)
             }

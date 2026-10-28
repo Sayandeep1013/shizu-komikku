@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.ui.reader.model
 
 import eu.kanade.tachiyomi.source.model.Page
 import kotlinx.coroutines.flow.MutableStateFlow
+import mihon.feature.translation.TranslationStatus
 import java.io.InputStream
 
 open class ReaderPage(
@@ -23,6 +24,11 @@ open class ReaderPage(
     // KMK -->
     /** Translated image for this page, published by the live translator; holders prefer it over [stream]. */
     val translatedStream = MutableStateFlow<(() -> InputStream)?>(null)
+
+    /** The finished translation, kept while the user flips to the original. */
+    var translatedImage: (() -> InputStream)? = null
+
+    val translationStatus = MutableStateFlow<TranslationStatus>(TranslationStatus.Idle)
     // KMK <--
 
     /** Value to check if a page is too wide to be doubled up */

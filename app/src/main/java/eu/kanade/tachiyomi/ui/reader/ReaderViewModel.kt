@@ -350,7 +350,7 @@ class ReaderViewModel @JvmOverloads constructor(
     private val downloadAheadAmount = downloadPreferences.autoDownloadWhileReading().get()
 
     // KMK -->
-    private val liveTranslator = LiveTranslator(viewModelScope)
+    val liveTranslator = LiveTranslator(viewModelScope)
     // KMK <--
 
     init {
