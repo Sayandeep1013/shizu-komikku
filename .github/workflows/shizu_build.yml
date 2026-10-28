@@ -1,4 +1,5 @@
 name: Shizu build
+# Builds a signed preview APK of the Shizu fork on every branch push (see docs in the desktop repo).
 on:
   push:
     branches-ignore:
