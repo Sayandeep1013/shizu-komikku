@@ -67,10 +67,17 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.SHIZU_KEYSTORE_PASSWORD }}
         run: |
           set -e
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/shizu.p12"
-          build_tools=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           apk=$(ls app/build/outputs/apk/preview/*universal*.apk | head -1)
           out="Shizu-Komikku-r${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}.apk"
+          if [ -z "$KEYSTORE_B64" ]; then
+            # No stable key configured: ship the CI debug-signed APK. It installs, but the next
+            # build won't update over it (different key) until SHIZU_KEYSTORE_* secrets are set.
+            echo "::warning::SHIZU_KEYSTORE_B64 not set; APK is signed with this run's debug key"
+            cp "$apk" "${out%.apk}-debugkey.apk"
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/shizu.p12"
+          build_tools=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           "$ANDROID_HOME/build-tools/$build_tools/apksigner" sign \
             --ks "$RUNNER_TEMP/shizu.p12" --ks-type PKCS12 --ks-key-alias shizu \
             --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD \
