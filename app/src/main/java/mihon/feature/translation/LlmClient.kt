@@ -156,9 +156,9 @@ class LlmClient(
                             "Their bubble images follow: read what is actually written in each image and translate that.",
                     ),
                 )
-                crops.forEach { (id, png) ->
+                crops.forEach { (id, jpeg) ->
                     add(textPart("Image for $id:"))
-                    add(imagePart(png))
+                    add(imagePart(jpeg))
                 }
             }
         }
@@ -198,11 +198,11 @@ class LlmClient(
         put("text", text)
     }
 
-    private fun imagePart(png: ByteArray) = buildJsonObject {
+    private fun imagePart(jpeg: ByteArray) = buildJsonObject {
         put("type", "image_url")
         put(
             "image_url",
-            buildJsonObject { put("url", "data:image/png;base64," + Base64.encodeToString(png, Base64.NO_WRAP)) },
+            buildJsonObject { put("url", "data:image/jpeg;base64," + Base64.encodeToString(jpeg, Base64.NO_WRAP)) },
         )
     }
 

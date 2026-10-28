@@ -117,7 +117,7 @@ class PageTranslator(
         val bottom = (block.box.bottom + pad).coerceAtMost(bitmap.height)
         val piece = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
         return ByteArrayOutputStream().use {
-            piece.compress(Bitmap.CompressFormat.PNG, 100, it)
+            piece.compress(Bitmap.CompressFormat.JPEG, 85, it)
             piece.recycle()
             it.toByteArray()
         }
@@ -125,7 +125,7 @@ class PageTranslator(
 
     companion object {
         /** ML Kit line confidence below this sends the bubble's crop along for the vision model. */
-        private const val REREAD_BELOW = 0.7f
+        private const val REREAD_BELOW = 0.5f
         private const val JPEG_QUALITY = 92
         private const val MAX_PIXELS = 40_000_000L
     }

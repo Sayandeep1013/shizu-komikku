@@ -93,7 +93,8 @@ class LiveTranslator(
                 if (target.translatedStream.value != null || jobs[target]?.isActive == true) continue
                 // Auto mode doesn't hammer a page that just failed; the button retries it.
                 if (target.translationStatus.value is TranslationStatus.Failed && index != first) continue
-                launchPage(target, force = false)
+                // The page on screen jumps the network queue; pages ahead wait their turn.
+                launchPage(target, force = false, priority = index == first)
             }
             xLogW("window: page ${page.number}..${last + 1} of ${pages.size}, active jobs ${jobs.size}")
         }
@@ -107,7 +108,7 @@ class LiveTranslator(
         }
         if (jobs[page]?.isActive == true && page.translationStatus.value == TranslationStatus.Working) return
         jobs.remove(page)?.cancel()
-        launchPage(page, force = true)
+        launchPage(page, force = true, priority = true)
     }
 
     /** Flip between the original page and its translation (long-press on the button). */
@@ -127,12 +128,12 @@ class LiveTranslator(
         page.translationStatus.value = TranslationStatus.Done
     }
 
-    private fun launchPage(page: ReaderPage, force: Boolean) {
+    private fun launchPage(page: ReaderPage, force: Boolean, priority: Boolean) {
         page.translationStatus.value = TranslationStatus.Queued
-        jobs[page] = scope.launch(Dispatchers.IO) { translatePage(page, force) }
+        jobs[page] = scope.launch(Dispatchers.IO) { translatePage(page, force, priority) }
     }
 
-    private suspend fun translatePage(page: ReaderPage, force: Boolean) {
+    private suspend fun translatePage(page: ReaderPage, force: Boolean, priority: Boolean) {
         val started = System.currentTimeMillis()
         try {
             page.statusFlow.first { it == Page.State.Ready }
@@ -163,7 +164,7 @@ class LiveTranslator(
             val result = pageTranslator.translate(
                 bytes,
                 synchronized(recentPairs) { recentPairs.toList() },
-                priority = force,
+                priority = priority,
             )
             // Numbers only: page content is never logged.
             xLogW("page ${page.number}: ${result.stats} total=${System.currentTimeMillis() - started}ms")
