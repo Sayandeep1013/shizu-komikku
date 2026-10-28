@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shizu builds (preview build type) show their own name everywhere app_name is used. -->
+    <string name="app_name" translatable="false">Shizu</string>
+</resources>

@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="432"
+    android:viewportHeight="432">
+    <!-- Themed icon: bubble with the two lines cut out, plus the sparkle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M152,120 H280 A48,48 0 0 1 328,168 V244 A48,48 0 0 1 280,292 H198 L138,336 L154,292 H152 A48,48 0 0 1 104,244 V168 A48,48 0 0 1 152,120 Z M152,168 H238 A12,12 0 0 1 250,180 A12,12 0 0 1 238,192 H152 A12,12 0 0 1 140,180 A12,12 0 0 1 152,168 Z M152,214 H280 A12,12 0 0 1 292,226 A12,12 0 0 1 280,238 H152 A12,12 0 0 1 140,226 A12,12 0 0 1 152,214 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M306,98 Q311,123 336,128 Q311,133 306,158 Q301,133 276,128 Q301,123 306,98 Z" />
+</vector>
