@@ -52,8 +52,9 @@ class LlmRouter(
 
         fun isTransient(e: Throwable): Boolean = when (e) {
             is IOException -> true
-            is TranslationException -> e.code == null || e.code == 408 || e.code == 409 || e.code == 425 ||
-                e.code == 429 || e.code >= 500
+            is TranslationException ->
+                e.code == null || e.code == 408 || e.code == 409 || e.code == 425 ||
+                    e.code == 429 || e.code >= 500
             else -> false
         }
 
